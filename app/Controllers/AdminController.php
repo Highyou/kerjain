@@ -282,12 +282,29 @@ class AdminController extends BaseController
 
     public function laporanExport()
     {
-        // Export CSV sederhana
-        $orders = $this->orderModel->findAll();
+        // Batasi ekspor agar tidak memuat seluruh tabel ke memori sekaligus.
+        $orders = $this->orderModel->orderBy('id', 'DESC')->findAll(10000);
         $csv = "No,Kode Order,Buyer,Total,Status,Tanggal\n";
         foreach ($orders as $i => $o) {
-            $csv .= ($i+1) . ',' . $o['order_code'] . ',' . $o['buyer_id'] . ','
-                  . $o['total_amount'] . ',' . $o['status'] . ',' . $o['created_at'] . "\n";
+            $values = [
+                $i + 1,
+                $o['order_code'],
+                $o['buyer_id'],
+                $o['total_amount'],
+                $o['status'],
+                $o['created_at'],
+            ];
+
+            $values = array_map(static function ($value): string {
+                $value = (string) $value;
+                if (preg_match('/^[\\s\\x00-\\x1f]*[=+@-]/', $value)) {
+                    $value = "'" . $value;
+                }
+
+                return '"' . str_replace('"', '""', $value) . '"';
+            }, $values);
+
+            $csv .= implode(',', $values) . "\n";
         }
 
         return $this->response

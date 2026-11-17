@@ -23,8 +23,12 @@ class AuthFilter implements FilterInterface
             $userRole     = $session->get('role');
 
             if ($userRole !== $requiredRole) {
-                return redirect()->to("/{$userRole}/dashboard")
-                                 ->with('error', 'Akses ditolak.');
+                if (in_array($userRole, ['admin', 'seller', 'buyer'], true)) {
+                    return redirect()->to("/{$userRole}/dashboard")
+                                     ->with('error', 'Akses ditolak.');
+                }
+
+                return redirect()->to('/auth/login')->with('error', 'Silakan login kembali.');
             }
         }
     }

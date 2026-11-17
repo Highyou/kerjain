@@ -129,6 +129,15 @@ class BuyerController extends BaseController
 
     public function checkoutProcess()
     {
+        $rules = [
+            'payment_method' => 'required|in_list[transfer_bank,gopay,ovo,dana,cod]',
+            'note'           => 'permit_empty|max_length[1000]',
+        ];
+
+        if (!$this->validate($rules)) {
+            return redirect()->back()->withInput()->with('errors', $this->validator->getErrors());
+        }
+
         $buyerId = session()->get('user_id');
         $items   = $this->cartModel->getCartWithDetails($buyerId);
 
@@ -194,13 +203,18 @@ class BuyerController extends BaseController
     public function orderSelesai($orderItemId)
     {
         $buyerId = session()->get('user_id');
-        $item    = $this->orderItemModel->find($orderItemId);
+        $item    = $this->orderItemModel
+            ->select('order_items.*')
+            ->join('orders', 'orders.id = order_items.order_id')
+            ->where('order_items.id', $orderItemId)
+            ->where('orders.buyer_id', $buyerId)
+            ->first();
 
-        if (!$item) {
-            return redirect()->back()->with('error', 'Item tidak ditemukan.');
+        if (!$item || $item['status'] !== 'delivered') {
+            return redirect()->back()->with('error', 'Item tidak ditemukan atau belum siap dikonfirmasi.');
         }
 
-        // Update item jadi completed
+        // Update item jadi completed.
         $this->orderItemModel->update($orderItemId, [
             'status' => 'completed',
         ]);
@@ -273,7 +287,7 @@ class BuyerController extends BaseController
                     ->where('order_items.id', $orderItemId)
                     ->first();
 
-        if (!$item || $item['status'] !== 'completed') {
+        if (!$item || (int) $item['buyer_id'] !== (int) session()->get('user_id') || $item['status'] !== 'completed') {
             return redirect()->to(base_url('buyer/orders'))
                             ->with('error', 'Review tidak tersedia.');
         }
@@ -303,7 +317,17 @@ class BuyerController extends BaseController
         }
 
         $orderItemId = $this->request->getPost('order_item_id');
-        $item        = $this->orderItemModel->find($orderItemId);
+        $item        = $this->orderItemModel
+            ->select('order_items.*')
+            ->join('orders', 'orders.id = order_items.order_id')
+            ->where('order_items.id', $orderItemId)
+            ->where('orders.buyer_id', session()->get('user_id'))
+            ->where('order_items.status', 'completed')
+            ->first();
+
+        if (!$item || $this->reviewModel->where('order_item_id', $orderItemId)->first()) {
+            return redirect()->to('/buyer/orders')->with('error', 'Review tidak tersedia untuk pesanan ini.');
+        }
 
         $this->reviewModel->insert([
             'order_item_id' => $orderItemId,
@@ -330,22 +354,47 @@ class BuyerController extends BaseController
 
     public function profileUpdate()
     {
-        // update name, phone, avatar
+        $rules = [
+            'name'   => 'required|min_length[2]|max_length[100]',
+            'phone'  => 'permit_empty|max_length[30]',
+            'avatar' => 'if_exist|max_size[avatar,1024]|is_image[avatar]|mime_in[avatar,image/jpg,image/jpeg,image/png]',
+        ];
+
+        if (!$this->validate($rules)) {
+            return redirect()->back()->withInput()->with('errors', $this->validator->getErrors());
+        }
+
         $userId = session()->get('user_id');
         $userModel = new \App\Models\UserModel();
 
-        $data = ['name' => $this->request->getPost('name'), 'phone' => $this->request->getPost('phone')];
+        $data = [
+            'name'  => trim($this->request->getPost('name')),
+            'phone' => trim((string) $this->request->getPost('phone')),
+        ];
 
         $avatar = $this->request->getFile('avatar');
-        if ($avatar && $avatar->isValid()) {
+        if ($avatar && $avatar->isValid() && !$avatar->hasMoved()) {
+            $uploadPath = ROOTPATH . 'public/uploads/avatars';
+            if (!is_dir($uploadPath) && !mkdir($uploadPath, 0755, true) && !is_dir($uploadPath)) {
+                return redirect()->back()->withInput()->with('error', 'Direktori upload tidak tersedia.');
+            }
+
             $newName = $avatar->getRandomName();
-            $avatar->move(ROOTPATH . 'public/uploads/avatars', $newName);
+            if (!$avatar->move($uploadPath, $newName)) {
+                return redirect()->back()->withInput()->with('error', 'Foto profil gagal diunggah.');
+            }
+
             $data['avatar'] = $newName;
-            session()->set('avatar', $newName);
         }
 
-        $userModel->update($userId, $data);
+        if (!$userModel->update($userId, $data)) {
+            return redirect()->back()->withInput()->with('error', 'Profil gagal diperbarui.');
+        }
+
         session()->set('name', $data['name']);
+        if (isset($data['avatar'])) {
+            session()->set('avatar', $data['avatar']);
+        }
 
         return redirect()->back()->with('success', 'Profil berhasil diperbarui.');
     }

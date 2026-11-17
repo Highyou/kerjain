@@ -206,17 +206,23 @@ class SellerController extends BaseController
     {
         $id     = $this->request->getPost('order_item_id');
         $status = $this->request->getPost('status');
-        $allowed = ['confirmed', 'in_progress', 'delivered'];
+        $allowed = ['confirmed', 'in_progress'];
 
-        if (!in_array($status, $allowed)) {
+        if (!in_array($status, $allowed, true)) {
             return redirect()->back()->with('error', 'Status tidak valid.');
         }
 
         $sellerId = $this->getSellerId();
         $item     = $this->orderItemModel->where('id', $id)->where('seller_id', $sellerId)->first();
 
-        if (!$item) {
-            return redirect()->back()->with('error', 'Pesanan tidak ditemukan.');
+        $nextStatus = [
+            'pending'     => 'confirmed',
+            'confirmed'   => 'in_progress',
+            'in_progress' => 'delivered',
+        ];
+
+        if (!$item || ($nextStatus[$item['status']] ?? null) !== $status) {
+            return redirect()->back()->with('error', 'Perubahan status pesanan tidak valid.');
         }
 
         $this->orderItemModel->update($id, [
@@ -237,13 +243,31 @@ class SellerController extends BaseController
             return redirect()->back()->with('error', 'Pesanan tidak ditemukan.');
         }
 
+        if ($item['status'] !== 'in_progress') {
+            return redirect()->back()->with('error', 'Pesanan belum siap dikirim.');
+        }
+
+        $rules = [
+            'delivery_file' => 'uploaded[delivery_file]|max_size[delivery_file,20480]|ext_in[delivery_file,pdf,zip,doc,docx,xls,xlsx,ppt,pptx,jpg,jpeg,png]',
+        ];
+        if (!$this->validate($rules)) {
+            return redirect()->back()->with('errors', $this->validator->getErrors());
+        }
+
         $file = $this->request->getFile('delivery_file');
-        if (!$file || !$file->isValid()) {
+        if (!$file || !$file->isValid() || $file->hasMoved()) {
             return redirect()->back()->with('error', 'File tidak valid.');
         }
 
+        $uploadPath = ROOTPATH . 'public/uploads/deliveries';
+        if (!is_dir($uploadPath) && !mkdir($uploadPath, 0755, true) && !is_dir($uploadPath)) {
+            return redirect()->back()->with('error', 'Direktori upload tidak tersedia.');
+        }
+
         $newName = $file->getRandomName();
-        $file->move(ROOTPATH . 'public/uploads/deliveries', $newName);
+        if (!$file->move($uploadPath, $newName)) {
+            return redirect()->back()->with('error', 'File gagal diunggah.');
+        }
 
         $this->orderItemModel->update($id, [
             'delivery_file' => $newName,
